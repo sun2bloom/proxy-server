@@ -1,57 +1,62 @@
-export default async function handler(request) {
+// api/proxy.js
+export default async function handler(req) {
   try {
-    const url = new URL(request.url);
-    const target = url.searchParams.get('url');
+    const { searchParams } = new URL(req.url);
+    const target = searchParams.get("url");
+
     if (!target) {
-      return new Response('Missing "url" query parameter', { status: 400 });
+      return new Response("Missing ?url=", { status: 400 });
     }
 
+    // Validate scheme
     if (!/^https?:\/\//i.test(target)) {
-      return new Response('Invalid URL scheme', { status: 400 });
+      return new Response("Invalid URL scheme", { status: 400 });
     }
 
-    const fetchOptions = {
-      method: 'GET',
+    console.log("Fetching:", target);
+
+    // Fetch the page
+    const fetched = await fetch(target, {
       headers: {
-        'User-Agent': request.headers.get('user-agent') || 'Vercel-Proxy',
-        'Accept': request.headers.get('accept') || '*/*'
+        "User-Agent": "ProxyBrowser/1.0",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
-    };
+    });
 
-    const res = await fetch(target, fetchOptions);
+    const contentType = fetched.headers.get("content-type") || "";
 
-    const contentType = res.headers.get('content-type') || 'application/octet-stream';
-
-    if (contentType.includes('text/html')) {
-      let body = await res.text();
-
-      body = body.replace(
-        /(?:href|src)=["'](https?:\/\/[^"']+)["']/gi,
-        (m, group1) => {
-          const proxied = `/api/proxy?url=${encodeURIComponent(group1)}`;
-          return m.replace(group1, proxied);
-        }
-      );
-
-      return new Response(body, {
-        status: res.status,
+    // Handle non-HTML content (like images, css)
+    if (!contentType.includes("text/html")) {
+      const bytes = await fetched.arrayBuffer();
+      return new Response(bytes, {
+        status: fetched.status,
         headers: {
-          'Content-Type': contentType,
-          'Access-Control-Allow-Origin': '*',
+          "Content-Type": contentType,
+          "Access-Control-Allow-Origin": "*",
         },
       });
     }
 
-    const headers = new Headers();
-    headers.set('Content-Type', contentType);
-    headers.set('Access-Control-Allow-Origin', '*');
+    // Get HTML text
+    let html = await fetched.text();
 
-    return new Response(res.body, {
-      status: res.status,
-      headers,
+    // (Optional) Rewrite href/src links to go through proxy
+    html = html.replace(
+      /(?:href|src)=["'](https?:\/\/[^"']+)["']/gi,
+      (match, group1) =>
+        match.replace(group1, `/api/proxy?url=${encodeURIComponent(group1)}`)
+    );
+
+    // Return the HTML with CORS header
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+      },
     });
   } catch (err) {
-    console.error('Proxy error:', err);
-    return new Response('Internal Server Error', { status: 500 });
+    console.error("Proxy error:", err);
+    return new Response("Internal Error", { status: 500 });
   }
 }
